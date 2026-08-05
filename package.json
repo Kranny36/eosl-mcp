@@ -1,0 +1,17 @@
+{
+  "name": "eosl-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for EOSL.ai — source-backed hardware end-of-life (EOL/EOSL) lookups by part number; every date links to the vendor's own bulletin.",
+  "bin": { "eosl-mcp": "server.js" },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node server.js --selftest"
+  },
+  "engines": { "node": ">=18" },
+  "keywords": ["mcp", "model-context-protocol", "eol", "eosl", "end-of-life", "hardware", "lifecycle", "datacenter"],
+  "author": "EOSL.ai",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/Kranny36/eosl-mcp.git" },
+  "homepage": "https://eosl.ai/mcp/"
+}
