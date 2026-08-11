@@ -30,7 +30,7 @@ const MAX_PART = 100;
 const MAX_QUERY = 120;
 const MAX_BULK = 200;
 const DISCLAIMER = 'Confirm critical dates against the linked vendor bulletin (sourceUrl) before acting.';
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 // Fortinet publishes two names for one device (FG-100F vs FortiGate-100F). Aliases are vendor-gated:
 // applied when the caller omits the vendor or names Fortinet, off when they name anyone else.
@@ -142,28 +142,28 @@ const toolError = (message) => ({ content: [{ type: 'text', text: message }], is
 // ---- tools (identical to the hosted endpoint) ---------------------------------------------------
 const TOOLS = [
   { name: 'lookup_part',
-    description: 'Look up one hardware part number in the EOSL.ai database. Returns support status, End-of-Sale and End-of-Service-Life dates, support runway score, and the primary vendor bulletin URL backing the dates. Matching is exact, then punctuation-insensitive, then Fortinet short-SKU aliases (FG-60E -> FortiGate-60E). Returns found:false rather than guessing.',
+    description: 'Look up one hardware part number in the EOSL.ai database (read-only, no auth; for many parts use bulk_check). Returns support status, End-of-Sale and End-of-Service-Life dates, support runway score, and the primary vendor bulletin URL backing the dates. Matching is exact, then punctuation-insensitive, then Fortinet short-SKU aliases (FG-60E -> FortiGate-60E). Unknown parts return found:false rather than a guessed date.',
     inputSchema: { type: 'object', properties: {
       part_number: { type: 'string', description: 'Vendor part number / SKU, e.g. "WS-C3850-48P-S" or "FG-100F".' },
       vendor: { type: 'string', description: 'Optional vendor hint, e.g. "Cisco". Restricts the match to that vendor.' },
     }, required: ['part_number'] } },
   { name: 'bulk_check',
-    description: 'Check up to 200 part numbers in one call. Returns a per-part row (status, EOSL date, source URL, page URL) plus summary counts: past, endingSoon, supported, active, notFound.',
+    description: 'Check up to 200 part numbers in one call (read-only, no auth; for a single part use lookup_part). Returns a per-part row (status, EOSL date, source URL, page URL) plus summary counts: past, endingSoon, supported, active, notFound. Never partial and never destructive: unknown or malformed entries do not fail the call, each simply returns found:false in its row.',
     inputSchema: { type: 'object', properties: {
-      part_numbers: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 200, description: 'Part numbers to check (deduplicated; max 200).' },
+      part_numbers: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 200, description: 'Part numbers to check; max 200 after case-insensitive deduplication. Punctuation differences (dashes, dots, spaces) are tolerated by the matcher, so raw inventory strings are fine.' },
     }, required: ['part_numbers'] } },
   { name: 'search_models',
-    description: 'Search tracked product families by vendor, product line, or series name (case-insensitive substring, e.g. "nexus 9300"). Returns up to 10 families with status, EOSL window, and page URL. Use get_family with a returned slug for the full record.',
+    description: 'Search tracked product families by vendor, product line, or series name (case-insensitive substring, e.g. "nexus 9300"). Read-only. Returns up to 10 families with status, EOSL window, and page URL. Use this for discovery when you have a name; for an exact part number use lookup_part, and use get_family with a returned slug for the full record.',
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', minLength: 1, maxLength: 120, description: 'Search text, 1-120 characters.' },
     }, required: ['query'] } },
   { name: 'get_family',
-    description: 'Fetch the full source-backed record for one product family by slug (from search_models or lookup_part pageUrl): lifecycle dates per SKU group, every part number, support runway score factors, and the vendor bulletin URLs.',
+    description: 'Fetch the full source-backed record for one product family by slug (from search_models or lookup_part pageUrl): lifecycle dates per SKU group, every part number, support runway score factors, and the vendor bulletin URLs. Read-only; an unknown slug returns found:false with a hint, never an error.',
     inputSchema: { type: 'object', properties: {
       slug: { type: 'string', description: 'Family slug, e.g. "cisco-catalyst-3850".' },
     }, required: ['slug'] } },
   { name: 'list_vendors',
-    description: 'List all vendors tracked by EOSL.ai with family counts and vendor page URLs.',
+    description: 'List all vendors tracked by EOSL.ai with family counts and vendor page URLs. Read-only, no parameters. Use this first to check whether a vendor is covered at all; for specific models use search_models, for a part number use lookup_part.',
     inputSchema: { type: 'object', properties: {} } },
 ];
 

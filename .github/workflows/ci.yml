@@ -1,0 +1,20 @@
+# Runs the server's own selftest (JSON-RPC over stdio against the live eosl.ai dataset, with
+# negative controls). The weekly cron is deliberate: this server's correctness depends on a live
+# endpoint it does not control, so a green badge should mean "verified recently", not "verified
+# once at release".
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 7 * * 1'
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: node server.js --selftest
