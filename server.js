@@ -30,7 +30,7 @@ const MAX_PART = 100;
 const MAX_QUERY = 120;
 const MAX_BULK = 200;
 const DISCLAIMER = 'Confirm critical dates against the linked vendor bulletin (sourceUrl) before acting.';
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 
 // Fortinet publishes two names for one device (FG-100F vs FortiGate-100F). Aliases are vendor-gated:
 // applied when the caller omits the vendor or names Fortinet, off when they name anyone else.
@@ -98,6 +98,46 @@ function matchPart(part, vendor, data) {
   return { rec, via: rec ? via : null };
 }
 
+// Family-name fallback — ported from EOSL.ai's browser matcher (src/match.js) with identical
+// semantics: match when the family name contains the query, or the query contains the family name
+// (" Series" stripped). Added in 1.1.0 after a live miss: lookup_part("7010TX-48", "Arista")
+// returned found:false while eosl.ai itself has that family page. The 1.0.x matcher was ported from
+// netbox-eosl — right for NetBox, where devices carry real part numbers, wrong for MCP, where a
+// human asks an assistant about a MODEL name. Runs only after every SKU strategy has missed.
+function matchFamily(query, vendor, data) {
+  const n = String(query || '').toUpperCase().replace(/[^A-Z0-9\-\/\. ]/g, '').trim();
+  if (!n) return null;
+  for (const f of data.families) {
+    const fn = String(f.n).toUpperCase();
+    if (fn.indexOf(n) > -1 || n.indexOf(fn.replace(/ SERIES$/, '')) > -1) {
+      if (vendor && loose(vendor)) {
+        const lv = loose(vendor), fv = loose(f.v);
+        if (!fv.includes(lv) && !lv.includes(fv)) continue;   // wrong vendor — keep scanning
+      }
+      return f;
+    }
+  }
+  return null;
+}
+
+function famResult(f, queried) {
+  return {
+    found: true,
+    matchedVia: 'family-name',
+    family: f.n,
+    vendor: f.v,
+    status: deriveStatus(f),
+    endOfSale: f.eos || null,
+    endOfServiceLife: f.eol || null,
+    exposureScore: f.xs,
+    exposureBand: f.xb,
+    sourceUrl: f.src,
+    pageUrl: `${SITE}/system/${f.s}/`,
+    queried,
+    note: 'Matched by product/family name, not an exact part number. These are the family-level dates; use get_family for every part number in it, and confirm the exact part before acting.',
+  };
+}
+
 // ---- status (from dataset fields only — no invented dates) --------------------------------------
 function deriveStatus(rec) {
   if (rec.a) return 'active — no EOL announced';
@@ -142,7 +182,7 @@ const toolError = (message) => ({ content: [{ type: 'text', text: message }], is
 // ---- tools (identical to the hosted endpoint) ---------------------------------------------------
 const TOOLS = [
   { name: 'lookup_part',
-    description: 'Look up one hardware part number in the EOSL.ai database (read-only, no auth; for many parts use bulk_check). Returns support status, End-of-Sale and End-of-Service-Life dates, support runway score, and the primary vendor bulletin URL backing the dates. Matching is exact, then punctuation-insensitive, then Fortinet short-SKU aliases (FG-60E -> FortiGate-60E). Unknown parts return found:false rather than a guessed date.',
+    description: 'Look up one hardware part number or model name in the EOSL.ai database (read-only, no auth; for many parts use bulk_check). Returns support status, End-of-Sale and End-of-Service-Life dates, support runway score, and the primary vendor bulletin URL backing the dates. Matching is exact, then punctuation-insensitive, then Fortinet short-SKU aliases (FG-60E -> FortiGate-60E); a model/family name (e.g. "7010TX-48") that matches no SKU returns the family-level record, flagged matchedVia:family-name. Anything else returns found:false rather than a guessed date.',
     inputSchema: { type: 'object', properties: {
       part_number: { type: 'string', description: 'Vendor part number / SKU, e.g. "WS-C3850-48P-S" or "FG-100F".' },
       vendor: { type: 'string', description: 'Optional vendor hint, e.g. "Cisco". Restricts the match to that vendor.' },
@@ -177,7 +217,14 @@ async function callTool(name, args) {
     const vendor = typeof args.vendor === 'string' ? args.vendor.trim().slice(0, MAX_PART) : '';
     const data = await getData();
     const { rec, via } = matchPart(part, vendor, data);
-    if (!rec) return toolText(`${part}: not found in the EOSL.ai database.`, notFound(part));
+    if (!rec) {
+      const fam = matchFamily(part, vendor, data);
+      if (fam) {
+        const fr = famResult(fam, part);
+        return toolText(`${part}: matched product family ${fr.family} — ${fr.status}. EOSL ${fr.endOfServiceLife || 'n/a'} — vendor bulletin: ${fr.sourceUrl}. Family-level match; confirm the exact part number.`, fr);
+      }
+      return toolText(`${part}: not found in the EOSL.ai database.`, notFound(part));
+    }
     const r = skuResult(rec, via, part);
     return toolText(`${r.part} (${r.vendor} ${r.family}): ${r.status}. EOSL ${r.endOfServiceLife || 'n/a'} — vendor bulletin: ${r.sourceUrl}`, r);
   }
@@ -197,7 +244,20 @@ async function callTool(name, args) {
     const summary = { past: 0, endingSoon: 0, supported: 0, active: 0, notFound: 0 };
     const rows = parts.map((part) => {
       const { rec } = matchPart(part, '', data);
-      if (!rec) { summary.notFound++; return { part, found: false }; }
+      if (!rec) {
+        const fam = matchFamily(part, '', data);
+        if (fam) {
+          const status = deriveStatus(fam);
+          const bucket = statusBucket(status);
+          if (bucket in summary) summary[bucket]++;
+          return {
+            part, found: true, matchedVia: 'family-name', family: fam.n, vendor: fam.v, status,
+            endOfServiceLife: fam.eol || null, sourceUrl: fam.src, pageUrl: `${SITE}/system/${fam.s}/`,
+            note: 'family-name match — confirm the exact part number',
+          };
+        }
+        summary.notFound++; return { part, found: false };
+      }
       const status = deriveStatus(rec);
       const bucket = statusBucket(status);
       if (bucket in summary) summary[bucket]++;
@@ -319,6 +379,12 @@ async function selftest() {
     ok(/past end of service life/.test(text) && /cisco\.com/.test(text), 'lookup_part resolves a known part with its vendor bulletin');
     const miss = await handleMessage({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'lookup_part', arguments: { part_number: 'NOT-A-REAL-PART-999' } } });
     ok(/found": false/.test(miss.result.content[0].text), 'CONTROL: an invented part returns found:false, never a guess');
+    // The 1.1.0 fix: a MODEL name (no SKU carries it verbatim) must resolve to the family record.
+    // "7010TX-48" is the live query that exposed the gap — its SKUs are DCS-7010TX-48-*.
+    const fam = await handleMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'lookup_part', arguments: { part_number: '7010TX-48', vendor: 'Arista' } } });
+    ok(/family-name/.test(fam.result.content[0].text) && /arista\.com/.test(fam.result.content[0].text), 'a model/family name resolves to the family record with its bulletin');
+    const famWrongVendor = await handleMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'lookup_part', arguments: { part_number: '7010TX-48', vendor: 'Cisco' } } });
+    ok(/found": false/.test(famWrongVendor.result.content[0].text), 'CONTROL: the family fallback respects the vendor gate (Cisco + an Arista model = not found)');
   } catch (e) {
     console.log(`  SKIP  network checks (${e.message}) — introspection checks above are the offline core`);
   }
