@@ -60,7 +60,10 @@ async function getData() {
     if (!looseIdx.has(lk)) looseIdx.set(lk, rec);
   }
   const famHay = raw.families.map((f) => `${f.v} ${f.n} ${f.s}`.toLowerCase());
-  cache = { data: { skus: raw.skus, families: raw.families, famHay, exact, looseIdx }, at: Date.now() };
+  // Distinct vendor display names, for telling a real vendor filter from a hint gone wrong
+  // (knownVendor).
+  const vendors = [...new Set(raw.families.map((f) => f.v))];
+  cache = { data: { skus: raw.skus, families: raw.families, famHay, exact, looseIdx, vendors }, at: Date.now() };
   return cache.data;
 }
 
@@ -96,6 +99,20 @@ function matchPart(part, vendor, data) {
     if (!rv.includes(lv) && !lv.includes(rv)) return { rec: null, via: null };
   }
   return { rec, via: rec ? via : null };
+}
+
+// Does the caller's vendor string name a vendor we track at all? Same containment test matchPart
+// uses, so "Cisco Systems" and "HPE Aruba" count as known. Ported from the hosted server
+// (functions/mcp.js, 2026-09-09), which added it after telemetry showed WHY WS-C3850-48P-S missed
+// daily for a month while fully tracked: a client was passing vendor:"eosl.ai". A filter that names
+// no tracked vendor cannot be protecting anyone from a cross-vendor match — it is an argument
+// mix-up, and honouring it turns a tracked part into found:false. So an unknown vendor is IGNORED
+// and the answer says so; a KNOWN vendor stays a hard constraint (another vendor's dates are worse
+// than no answer).
+function knownVendor(vendor, data) {
+  const lv = loose(vendor);
+  if (!lv) return false;
+  return data.vendors.some((v) => { const rv = loose(v); return rv.includes(lv) || lv.includes(rv); });
 }
 
 // Family-name fallback — ported from EOSL.ai's browser matcher (src/match.js) with identical
@@ -185,7 +202,7 @@ const TOOLS = [
     description: 'Look up one hardware part number or model name in the EOSL.ai database (read-only, no auth; for many parts use bulk_check). Returns support status, End-of-Sale and End-of-Service-Life dates, support runway score, and the primary vendor bulletin URL backing the dates. Matching is exact, then punctuation-insensitive, then Fortinet short-SKU aliases (FG-60E -> FortiGate-60E); a model/family name (e.g. "7010TX-48") that matches no SKU returns the family-level record, flagged matchedVia:family-name. Anything else returns found:false rather than a guessed date.',
     inputSchema: { type: 'object', properties: {
       part_number: { type: 'string', description: 'Vendor part number / SKU, e.g. "WS-C3850-48P-S" or "FG-100F".' },
-      vendor: { type: 'string', description: 'Optional vendor hint, e.g. "Cisco". Restricts the match to that vendor.' },
+      vendor: { type: 'string', description: 'Optional vendor, e.g. "Cisco". A tracked vendor restricts the match to that vendor (a part tracked under another vendor returns found:false naming that vendor). A string that is not a tracked vendor is ignored and reported back as vendorHint.' },
     }, required: ['part_number'] } },
   { name: 'bulk_check',
     description: 'Check up to 200 part numbers in one call (read-only, no auth; for a single part use lookup_part). Returns a per-part row (status, EOSL date, source URL, page URL) plus summary counts: past, endingSoon, supported, active, notFound. Never partial and never destructive: unknown or malformed entries do not fail the call, each simply returns found:false in its row.',
@@ -214,18 +231,35 @@ async function callTool(name, args) {
     const part = typeof args.part_number === 'string' ? args.part_number.trim() : '';
     if (!part) return toolError('lookup_part requires a non-empty string "part_number".');
     if (part.length > MAX_PART) return toolError(`part_number too long (max ${MAX_PART} characters).`);
-    const vendor = typeof args.vendor === 'string' ? args.vendor.trim().slice(0, MAX_PART) : '';
+    const vendorGiven = typeof args.vendor === 'string' ? args.vendor.trim().slice(0, MAX_PART) : '';
     const data = await getData();
+    // An unknown vendor is dropped, not enforced (see knownVendor); the result carries the fact.
+    const vendorIgnored = vendorGiven && !knownVendor(vendorGiven, data);
+    const vendor = vendorIgnored ? '' : vendorGiven;
+    const withHint = (obj) => vendorIgnored
+      ? { ...obj, vendorHint: { given: vendorGiven, applied: false, note: `"${vendorGiven}" is not a vendor EOSL.ai tracks, so the hint was ignored and the part number was matched on its own. list_vendors gives the tracked names.` } }
+      : obj;
     const { rec, via } = matchPart(part, vendor, data);
     if (!rec) {
       const fam = matchFamily(part, vendor, data);
       if (fam) {
-        const fr = famResult(fam, part);
+        const fr = withHint(famResult(fam, part));
         return toolText(`${part}: matched product family ${fr.family} — ${fr.status}. EOSL ${fr.endOfServiceLife || 'n/a'} — vendor bulletin: ${fr.sourceUrl}. Family-level match; confirm the exact part number.`, fr);
       }
-      return toolText(`${part}: not found in the EOSL.ai database.`, notFound(part));
+      // A KNOWN vendor filter that excluded an exact part is still a miss — but a bare found:false
+      // sends the agent away believing the part is untracked. Name the vendor it IS tracked under.
+      // No dates cross the filter: the caller said "HPE", so Cisco's dates stay behind it.
+      if (vendor) {
+        const { rec: other } = matchPart(part, '', data);
+        if (other) {
+          const nf = { ...notFound(part), excludedByVendorFilter: { vendorGiven: vendor, trackedUnder: other.v, family: other.f, pageUrl: `${SITE}/system/${other.s}/` },
+            note: `${other.p} is tracked under ${other.v}, not "${vendor}". Your vendor filter excluded it; call again without the vendor to get the record.` };
+          return toolText(`${part}: tracked under ${other.v}, not "${vendor}" — excluded by your vendor filter.`, nf);
+        }
+      }
+      return toolText(`${part}: not found in the EOSL.ai database.`, withHint(notFound(part)));
     }
-    const r = skuResult(rec, via, part);
+    const r = withHint(skuResult(rec, via, part));
     return toolText(`${r.part} (${r.vendor} ${r.family}): ${r.status}. EOSL ${r.endOfServiceLife || 'n/a'} — vendor bulletin: ${r.sourceUrl}`, r);
   }
 

@@ -57,7 +57,15 @@ node server.js --selftest
 
 Exact match first, then punctuation-insensitive, then **vendor-gated** Fortinet short-SKU aliases
 (`FG-60E` → `FortiGate-60E`) — never fuzzy. If a caller names a vendor, a match from any other
-vendor is rejected: another vendor's dates are worse than no answer.
+vendor is rejected: another vendor's dates are worse than no answer. The rejection says which vendor
+the part *is* tracked under, so a filter mistake reads as a filter mistake rather than as a coverage
+gap.
+
+**A `vendor` that names no tracked vendor is ignored, not enforced** (1.2.0). It cannot be protecting
+you from a cross-vendor match, so it is an argument mix-up — and honouring it turns a fully tracked
+part into `found:false`. The hosted server's telemetry caught a client passing `vendor:"eosl.ai"`,
+which made one Catalyst 3850 part number miss every day for a month while the site had its page.
+The answer comes back with a `vendorHint` saying the string was dropped and why.
 
 ## Data and privacy
 
