@@ -48,10 +48,22 @@ node server.js --selftest
 | Tool | What it does |
 |---|---|
 | `lookup_part` | One part number → status, end-of-sale, EOSL, support runway score, vendor bulletin URL |
-| `bulk_check` | Up to 200 part numbers in one call, with summary counts |
+| `bulk_check` | Up to 25 part numbers in one call, with summary counts. A longer list is refused, not shortened |
 | `search_models` | Find product families by vendor / line / series text |
 | `get_family` | Full source-backed record for one family (every SKU, group dates, sources) |
 | `list_vendors` | Tracked vendors with family counts |
+
+## How it works since 2.0.0
+
+This server is a relay. Every tool call is forwarded to the hosted endpoint at `https://eosl.ai/mcp`
+and the answer is returned unchanged, so the two can never disagree. `initialize` and `tools/list` are
+answered locally and need no network; tool calls need outbound HTTPS to eosl.ai.
+
+Versions up to 1.2.0 downloaded `https://eosl.ai/data/lookup.json` and matched locally. That file stops
+being served on 31 January 2027. **Upgrade before then.**
+
+Limits are the hosted server's: `bulk_check` takes 25 part numbers, and list checks are limited to 250
+part numbers a day per address. Looking up one part at a time is not limited.
 
 ## Matching, honestly
 
@@ -69,14 +81,12 @@ The answer comes back with a `vendorHint` saying the string was dropped and why.
 
 ## Data and privacy
 
-- Data source: [`https://eosl.ai/data/lookup.json`](https://eosl.ai/data/lookup.json) — the same
-  open dataset behind the site, **CC BY 4.0**, refreshed weekly from vendors' own published notices.
-- This local server sends only the HTTP fetches above; part numbers you look up locally are matched
-  in-process against the downloaded dataset copy for `lookup_part`/`bulk_check`/`search_models`
-  (only `get_family` fetches per-slug). The hosted endpoint records aggregate usage as described at
-  [eosl.ai/api/usage](https://eosl.ai/api/usage).
+- Data comes from the hosted endpoint, which reads vendors' own published notices, refreshed weekly.
+- Every tool call sends its arguments (the part numbers or search text) to `https://eosl.ai/mcp`. Nothing
+  is matched locally any more. The hosted endpoint records aggregate usage as described at
+  [eosl.ai/api/usage](https://eosl.ai/api/usage) and in the [privacy page](https://eosl.ai/privacy/).
 - Always confirm critical dates against the linked vendor bulletin before acting on them.
 
 ## License
 
-Code: Apache-2.0. Dataset: [CC BY 4.0](https://eosl.ai/dataset/) — attribution to EOSL.ai.
+Code: Apache-2.0.
