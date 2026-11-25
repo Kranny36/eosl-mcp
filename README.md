@@ -19,16 +19,16 @@ claude mcp add --transport http eosl https://eosl.ai/mcp
 
 ## This package: local stdio server
 
-Same five tools, same matching rules, reading the same public data — as a local stdio process.
+Same seven tools, answered by the hosted server, as a local stdio process. It is not published on npm; it runs straight from this repository.
 
 ```bash
-npx eosl-mcp
+npx -y github:Kranny36/eosl-mcp
 ```
 
 **Claude Desktop / any stdio client** (`mcpServers` config):
 
 ```json
-{ "mcpServers": { "eosl": { "command": "npx", "args": ["-y", "eosl-mcp"] } } }
+{ "mcpServers": { "eosl": { "command": "npx", "args": ["-y", "github:Kranny36/eosl-mcp"] } } }
 ```
 
 **Docker:**
@@ -52,6 +52,10 @@ node server.js --selftest
 | `search_models` | Find product families by vendor / line / series text |
 | `get_family` | Full source-backed record for one family (every SKU, group dates, sources) |
 | `list_vendors` | Tracked vendors with family counts |
+| `search` | The standard search half of the search/fetch pair that ChatGPT connectors and deep research call: up to 10 records as id, title and page address |
+| `fetch` | The full record for an id from `search`: every date group, its part numbers, the vendor source of each date and when it was last read |
+
+Every tool is read-only and annotated so (`readOnlyHint`). A part with no date is never counted as supported in `bulk_check`.
 
 ## How it works since 2.0.0
 
